@@ -2,11 +2,12 @@
 
 const gulp = require('gulp');
 const insert = require('gulp-insert');
-const fs= require('fs');
+const fs = require('fs');
+const { series, parallel } = require('gulp');
 
 const remap = fs.readFileSync('src/common/src/cordova-remap.js', 'utf-8');
 
-function webpack(config, callback){
+function webpack(config, callback) {
   const exec = require('child_process').exec;
   exec(__dirname + '/node_modules/.bin/webpack --config ' + config, (error, stdout, stderr) => {
     console.log(stdout);
@@ -15,32 +16,48 @@ function webpack(config, callback){
   });
 }
 
-gulp.task('prepack', function(cb){
+function prepack(cb) {
   webpack('webpack.prepack.config.js', cb);
-});
+}
 
-gulp.task('webpack-cordova', ['prepack'], function(cb){
+function webpackCordova(cb) {
   webpack('webpack.cordova.config.js', cb);
-});
+}
 
-gulp.task('dist', ['prepack'], function(cb){
+function dist(cb) {
   webpack('webpack.library.config.js', cb);
-});
+}
 
-gulp.task('remap', ['webpack-cordova'], function () {
+function remapTask() {
   return gulp.src(['dist/plugin.min.js', 'dist/www.min.js'])
-  .pipe(insert.prepend(remap))
-  .pipe(gulp.dest('dist'));
-});
+    .pipe(insert.prepend(remap))
+    .pipe(gulp.dest('dist'));
+}
 
-gulp.task('plugin', ['remap'], function () {
+function plugin() {
   return gulp.src(['dist/plugin.min.js'])
-  .pipe(gulp.dest('src/browser'));
-});
+    .pipe(gulp.dest('src/browser'));
+}
 
-gulp.task('www', ['remap'], function () {
+function www() {
   return gulp.src(['dist/www.min.js'])
-  .pipe(gulp.dest('www'));
-});
+    .pipe(gulp.dest('www'));
+}
 
-gulp.task('default', ['dist', 'plugin', 'www']);
+// Define task series
+const webpackCordovaSeries = series(prepack, webpackCordova);
+const distSeries = series(prepack, dist);
+const remapSeries = series(webpackCordovaSeries, remapTask);
+const pluginSeries = series(remapSeries, plugin);
+const wwwSeries = series(remapSeries, www);
+
+// Export tasks
+exports.prepack = prepack;
+exports.webpackCordova = webpackCordovaSeries;
+exports.dist = distSeries;
+exports.remap = remapSeries;
+exports.plugin = pluginSeries;
+exports.www = wwwSeries;
+
+// Default task
+exports.default = series(distSeries, pluginSeries, wwwSeries);
