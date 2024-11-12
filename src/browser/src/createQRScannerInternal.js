@@ -269,27 +269,43 @@ module.exports = function(){
     };
   }
 
-  function startCamera(success, error){
-      var currentCameraIndex = getCurrentCameraIndex();
-      var currentCamera = getCurrentCamera();
-      window.navigator.mediaDevices.getUserMedia({
-        audio: false,
-        video: {
-          deviceId: {exact: currentCamera.deviceId},
-          width: {ideal: currentCamera.width},
-          height: {ideal: currentCamera.height}
+  function startCamera(success, error) {
+    var currentCameraIndex = getCurrentCameraIndex();
+    var currentCamera = getCurrentCamera();
+    window.navigator.mediaDevices.getUserMedia({
+      audio: false,
+      video: {
+        deviceId: {exact: currentCamera.deviceId},
+        width: {ideal: currentCamera.width},
+        height: {ideal: currentCamera.height}
+      }
+    }).then(function(mediaStream) {
+      activeMediaStream = mediaStream;
+      var video = getVideoPreview();
+      
+      // Cross-browser compatibility fix
+      try {
+        // Modern approach - preferred method
+        video.srcObject = mediaStream;
+        console.log('video.srcObject', video.srcObject);
+      } catch (error) {
+        console.log('error', error);
+        // Fallback for older browsers
+        try {
+          video.src = URL.createObjectURL(mediaStream);
+        } catch (error) {
+          error(0); // UNEXPECTED_ERROR
+          return;
         }
-      }).then(function(mediaStream){
-        activeMediaStream = mediaStream;
-        var video = getVideoPreview();
-        video.src = URL.createObjectURL(mediaStream);
-        success(calcStatus());
-      }, function(err){
-        // something bad happened
-        err = null;
-        var code = currentCameraIndex? 4 : 3;
-        error(code); // FRONT_CAMERA_UNAVAILABLE : BACK_CAMERA_UNAVAILABLE
-      });
+      }
+      
+      success(calcStatus());
+    }, function(err) {
+      // something bad happened
+      err = null;
+      var code = currentCameraIndex ? 4 : 3;
+      error(code); // FRONT_CAMERA_UNAVAILABLE : BACK_CAMERA_UNAVAILABLE
+    });
   }
 
   function getTempCanvasAndContext(videoElement){
@@ -315,55 +331,102 @@ module.exports = function(){
     return getTempCanvasAndContext(videoElement).canvas.toDataURL('image/png');
   }
 
-  function initialize(success, error){
-    if(scanWorker === null){
-      var workerBlob = new Blob([workerScript],{type: "text/javascript"});
-      scanWorker = new Worker(URL.createObjectURL(workerBlob));
+  function initialize(success, error) {
+    // Helper function to detect Safari browser
+    function isSafari() {
+      return /^((?!chrome|android).)*safari/i.test(navigator.userAgent);
     }
-    if(!getVideoPreview()){
-      // prepare DOM (sync)
-      var videoPreview = document.createElement('video');
-      videoPreview.setAttribute('autoplay', 'autoplay');
-      videoPreview.setAttribute('id', ELEMENTS.preview);
-      videoPreview.setAttribute('style', 'display:block;position:fixed;top:50%;left:50%;' +
-      'width:auto;height:auto;min-width:100%;min-height:100%;z-index:' + ZINDEXES.preview +
-      ';-moz-transform: translateX(-50%) translateY(-50%);-webkit-transform: ' +
-      'translateX(-50%) translateY(-50%);transform:translateX(-50%) translateY(-50%);' +
-      'background-size:cover;background-position:50% 50%;background-color:#FFF;');
-      videoPreview.addEventListener('loadeddata', function(){
-        bringPreviewToFront();
-      });
-
-      var stillImg = document.createElement('div');
-      stillImg.setAttribute('id', ELEMENTS.still);
-      stillImg.setAttribute('style', 'display:block;position:fixed;top:50%;left:50%;visibility: hidden;' +
-      'width:auto;height:auto;min-width:100%;min-height:100%;z-index:' + ZINDEXES.still +
-      ';-moz-transform: translateX(-50%) translateY(-50%);-webkit-transform: ' +
-      'translateX(-50%) translateY(-50%);transform:translateX(-50%) translateY(-50%);' +
-      'background-size:cover;background-position:50% 50%;background-color:#FFF;');
-
-      document.body.appendChild(videoPreview);
-      document.body.appendChild(stillImg);
-    }
-    if(backCamera === null){
-      // set instance cameras
-      chooseCameras().then(function(cameras){
-        backCamera = cameras.backCamera;
-        frontCamera = cameras.frontCamera;
-        if(backCamera !== false){
-          success();
-        } else {
-          error(5); // CAMERA_UNAVAILABLE
+  
+    try {
+      // Initialize Web Worker with Safari compatibility
+      if (scanWorker === null) {
+        var workerBlob = new Blob([workerScript], { type: "text/javascript" });
+        var workerUrl = URL.createObjectURL(workerBlob);
+        try {
+          scanWorker = new Worker(workerUrl);
+        } catch (workerError) {
+          console.error('Worker creation error:', workerError);
+          error(0); // UNEXPECTED_ERROR
+          return;
+        } finally {
+          // Clean up the Blob URL after worker is created
+          URL.revokeObjectURL(workerUrl);
         }
-      }, function(err){
-        // something bad happened
-        err = null;
-        error(0); // UNEXPECTED_ERROR
-      });
-    } else if (backCamera === false){
-      error(5); // CAMERA_UNAVAILABLE
-    } else {
-      success();
+      }
+  
+      if (!getVideoPreview()) {
+        // prepare DOM (sync)
+        var videoPreview = document.createElement('video');
+        videoPreview.setAttribute('autoplay', 'autoplay');
+        videoPreview.setAttribute('playsinline', 'playsinline'); // Required for iOS Safari
+        videoPreview.setAttribute('muted', 'muted'); // Required for autoplay in Safari
+        videoPreview.setAttribute('id', ELEMENTS.preview);
+        
+        // Add webkit-playsinline for older iOS versions
+        videoPreview.setAttribute('webkit-playsinline', 'webkit-playsinline');
+  
+        // Safari may need explicit dimensions
+        var videoStyle = 'display:block;position:fixed;top:50%;left:50%;' +
+          'width:auto;height:auto;min-width:100%;min-height:100%;z-index:' + ZINDEXES.preview +
+          ';-moz-transform:translateX(-50%) translateY(-50%);' +
+          '-webkit-transform:translateX(-50%) translateY(-50%);' +
+          'transform:translateX(-50%) translateY(-50%);' +
+          'background-size:cover;background-position:50% 50%;' +
+          'background-color:#FFF;' +
+          'object-fit:cover;'; // Added for better video fitting
+  
+        videoPreview.setAttribute('style', videoStyle);
+  
+        // Ensure video starts playing as soon as data is loaded
+        videoPreview.addEventListener('loadeddata', function() {
+          bringPreviewToFront();
+          // Ensure video plays in Safari
+          if (isSafari()) {
+            videoPreview.play().catch(function(e) {
+              console.warn('Video play failed:', e);
+            });
+          }
+        });
+  
+        var stillImg = document.createElement('div');
+        stillImg.setAttribute('id', ELEMENTS.still);
+        var stillStyle = 'display:block;position:fixed;top:50%;left:50%;' +
+          'visibility:hidden;width:auto;height:auto;min-width:100%;' +
+          'min-height:100%;z-index:' + ZINDEXES.still +
+          ';-moz-transform:translateX(-50%) translateY(-50%);' +
+          '-webkit-transform:translateX(-50%) translateY(-50%);' +
+          'transform:translateX(-50%) translateY(-50%);' +
+          'background-size:cover;background-position:50% 50%;' +
+          'background-color:#FFF;';
+        
+        stillImg.setAttribute('style', stillStyle);
+  
+        document.body.appendChild(videoPreview);
+        document.body.appendChild(stillImg);
+      }
+  
+      if (backCamera === null) {
+        // set instance cameras
+        chooseCameras().then(function(cameras) {
+          backCamera = cameras.backCamera;
+          frontCamera = cameras.frontCamera;
+          if (backCamera !== false) {
+            success();
+          } else {
+            error(5); // CAMERA_UNAVAILABLE
+          }
+        }).catch(function(err) {
+          console.error('Camera initialization error:', err);
+          error(0); // UNEXPECTED_ERROR
+        });
+      } else if (backCamera === false) {
+        error(5); // CAMERA_UNAVAILABLE
+      } else {
+        success();
+      }
+    } catch (e) {
+      console.error('Initialization error:', e);
+      error(0); // UNEXPECTED_ERROR
     }
   }
 

@@ -99,22 +99,37 @@ function initCamera(cameraType) {
       cameraType = cameraTypes.BACK;
     }
   }
+  
   preview.setVideoUrl('');
   return VideoCapture.createAsync(cameraType ? availableCameras.front : availableCameras.back).then(function (videoCapture) {
     currentVideoCapture = videoCapture;
 
-    let videoUrl = URL.createObjectURL(currentVideoCapture.capture);
+    try {
+      // Modern approach - set srcObject directly
+      if (preview.video && 'srcObject' in preview.video) {
+        preview.video.srcObject = currentVideoCapture.capture;
+      } else {
+        // Fallback for older browsers
+        let videoUrl = URL.createObjectURL(currentVideoCapture.capture);
+        preview.setVideoUrl(videoUrl);
+      }
 
-    if (statusFlags.showing) {
-      preview.pause();
+      if (statusFlags.showing) {
+        preview.pause();
+      }
+      
+      if (statusFlags.showing) {
+        preview.resume();
+      }
+      
+      barcodeReader.setCapture(currentVideoCapture.capture);
+      statusFlags.canEnableLight = currentVideoCapture.canEnableLight;
+      statusFlags.currentCamera = cameraType;
+
+    } catch (err) {
+      console.error('Error setting video source:', err);
+      return Promise.wrapError(errorTypes.UNEXPECTED_ERROR);
     }
-    preview.setVideoUrl(videoUrl);
-    if (statusFlags.showing) {
-      preview.resume();
-    }
-    barcodeReader.setCapture(currentVideoCapture.capture);
-    statusFlags.canEnableLight = currentVideoCapture.canEnableLight;
-    statusFlags.currentCamera = cameraType;
 
   }, function (error) {
     const ACCESS_DENIED = -2147024891;
@@ -123,6 +138,11 @@ function initCamera(cameraType) {
       return Promise.wrapError(errorTypes.CAMERA_ACESS_DENIED);
     }
     return Promise.wrapError(errorTypes.UNEXPECTED_ERROR);
+  }).finally(function() {
+    // Cleanup any existing object URLs to prevent memory leaks
+    if (preview.video && preview.video.src && preview.video.src.startsWith('blob:')) {
+      URL.revokeObjectURL(preview.video.src);
+    }
   });
 }
 
